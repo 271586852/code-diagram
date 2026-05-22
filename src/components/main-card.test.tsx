@@ -27,9 +27,22 @@ describe("MainCard", () => {
     expect(push).toHaveBeenCalledWith("/facebook/react");
     expect(
       screen.queryByText(
-        "Please enter a valid GitHub repository URL or owner/repo",
+        "Please enter a local folder path, GitHub repository URL, or owner/repo",
       ),
     ).not.toBeInTheDocument();
+  });
+
+  it("accepts local folder paths", () => {
+    render(<MainCard isHome={false} />);
+
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "/Users/me/project" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Diagram" }));
+
+    expect(push).toHaveBeenCalledWith(
+      `/local?path=${encodeURIComponent("/Users/me/project")}`,
+    );
   });
 
   it("lets example repositories navigate without submitting the required input", () => {
@@ -43,7 +56,7 @@ describe("MainCard", () => {
     expect(push).toHaveBeenCalledWith("/fastapi/fastapi");
     expect(
       screen.queryByText(
-        "Please enter a valid GitHub repository URL or owner/repo",
+        "Please enter a local folder path, GitHub repository URL, or owner/repo",
       ),
     ).not.toBeInTheDocument();
   });

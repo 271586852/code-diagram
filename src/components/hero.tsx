@@ -48,7 +48,7 @@ const Hero = () => {
       <div className="relative mx-auto w-fit sm:hidden">
         <VioletSparkle className="pointer-events-none absolute -top-3 -left-9 h-auto w-9 -rotate-12" />
         <h1 className="text-center text-[2.65rem] leading-[0.96] font-bold">
-          Repository to <br />
+          Local folder to <br />
           diagram
         </h1>
         <SkySparkle className="pointer-events-none absolute -right-9 -bottom-4 h-auto w-9 rotate-6" />
@@ -57,7 +57,7 @@ const Hero = () => {
       <div className="relative mx-auto hidden w-full flex-row items-center justify-center sm:flex">
         <VioletSparkle className="absolute left-0 h-auto w-20 flex-shrink-0 -translate-y-16 p-2 md:relative md:ml-0 md:w-24 md:translate-x-10 md:-translate-y-0 lg:absolute lg:ml-32 lg:-translate-x-full lg:-translate-y-10" />
         <h1 className="relative inline-block w-full text-center text-5xl font-bold tracking-tighter md:text-6xl lg:pt-5 lg:text-7xl">
-          Repository to <br />
+          Local folder to <br />
           diagram&nbsp;
         </h1>
         <SkySparkle className="right-0 bottom-0 hidden h-auto w-16 flex-shrink-0 -translate-x-10 translate-y-20 md:block lg:absolute lg:w-20 lg:-translate-x-12 lg:translate-y-4" />

@@ -11,20 +11,26 @@ import { ApiKeyDialog } from "~/components/api-key-dialog";
 import { ApiKeyButton } from "~/components/api-key-button";
 import { useStarReminder } from "~/hooks/useStarReminder";
 import { SponsorSlot } from "~/components/sponsor-slot";
+import { ImportGraphPanel } from "~/components/import-graph-panel";
 
 type RepoPageClientProps = {
   username: string;
   repo: string;
+  localPath?: string;
   initialState?: DiagramStateResponse | null;
 };
 
 export default function RepoPageClient({
   username,
   repo,
+  localPath,
   initialState = null,
 }: RepoPageClientProps) {
   const [zoomingEnabled, setZoomingEnabled] = useState(false);
   const [diagramRendered, setDiagramRendered] = useState(false);
+  const [activeView, setActiveView] = useState<"architecture" | "imports">(
+    "architecture",
+  );
 
   useStarReminder();
 
@@ -45,7 +51,7 @@ export default function RepoPageClient({
     handleRegenerate,
     handleDiagramRenderError,
     state,
-  } = useDiagram(normalizedUsername, normalizedRepo, initialState);
+  } = useDiagram(normalizedUsername, normalizedRepo, initialState, localPath);
 
   const hasDiagram = Boolean(diagram);
   const hasError = Boolean(error || state.error);
@@ -65,6 +71,7 @@ export default function RepoPageClient({
           isHome={false}
           username={normalizedUsername}
           repo={normalizedRepo}
+          localPath={localPath}
           hasDiagram={hasDiagram}
           onCopy={handleCopy}
           lastGenerated={lastGenerated}
@@ -81,7 +88,39 @@ export default function RepoPageClient({
         />
       </div>
       <div className="mt-8 flex w-full flex-col items-center gap-8">
-        {loading ? (
+        {localPath ? (
+          <div className="inline-flex rounded-md border-[3px] border-black bg-[hsl(var(--neo-panel))] p-1 dark:border-[#1a0d30]">
+            <button
+              type="button"
+              onClick={() => setActiveView("architecture")}
+              className={`rounded-sm px-4 py-2 text-sm font-bold ${
+                activeView === "architecture"
+                  ? "bg-[hsl(var(--neo-button))] text-black"
+                  : "text-black dark:text-neutral-100"
+              }`}
+            >
+              Architecture
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView("imports")}
+              className={`rounded-sm px-4 py-2 text-sm font-bold ${
+                activeView === "imports"
+                  ? "bg-[hsl(var(--neo-button))] text-black"
+                  : "text-black dark:text-neutral-100"
+              }`}
+            >
+              Import Dependencies
+            </button>
+          </div>
+        ) : null}
+
+        {activeView === "imports" && localPath ? (
+          <ImportGraphPanel
+            localPath={localPath}
+            zoomingEnabled={zoomingEnabled}
+          />
+        ) : loading ? (
           <Loading
             costSummary={state.costSummary}
             status={state.status}
@@ -94,7 +133,7 @@ export default function RepoPageClient({
           />
         ) : (
           <div className="flex w-full flex-col items-center gap-8">
-            {hasDiagram && (
+            {hasDiagram && activeView === "architecture" && (
               <>
                 <div className="flex w-full justify-center px-4">
                   <MermaidChart

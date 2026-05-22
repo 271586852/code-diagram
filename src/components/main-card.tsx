@@ -14,10 +14,21 @@ import { Switch } from "~/components/ui/switch";
 import { parseGitHubRepoUrl } from "~/features/diagram/github-url";
 import { SponsorSlot } from "~/components/sponsor-slot";
 
+function looksLikeLocalPath(input: string): boolean {
+  const trimmed = input.trim();
+  return (
+    trimmed.startsWith("/") ||
+    trimmed.startsWith("~/") ||
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../")
+  );
+}
+
 interface MainCardProps {
   isHome?: boolean;
   username?: string;
   repo?: string;
+  localPath?: string;
   hasDiagram?: boolean;
   onCopy?: () => void;
   lastGenerated?: Date;
@@ -33,6 +44,7 @@ export default function MainCard({
   isHome = true,
   username,
   repo,
+  localPath,
   hasDiagram = false,
   onCopy,
   lastGenerated,
@@ -51,18 +63,28 @@ export default function MainCard({
     !isHome && !!username && !!repo && isExampleRepo(username, repo);
 
   useEffect(() => {
+    if (localPath) {
+      setRepoUrl(localPath);
+      return;
+    }
+
     if (username && repo) {
       setRepoUrl(`https://github.com/${username}/${repo}`);
     }
-  }, [username, repo]);
+  }, [localPath, username, repo]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
+    if (looksLikeLocalPath(repoUrl)) {
+      router.push(`/local?path=${encodeURIComponent(repoUrl.trim())}`);
+      return;
+    }
+
     const parsed = parseGitHubRepoUrl(repoUrl);
     if (!parsed) {
-      setError("Please enter a valid GitHub repository URL or owner/repo");
+      setError("Please enter a local folder path, GitHub repository URL, or owner/repo");
       return;
     }
 
@@ -86,7 +108,7 @@ export default function MainCard({
       <form onSubmit={handleSubmit} className="space-y-5 sm:space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
           <Input
-            placeholder="owner/repo or GitHub URL"
+            placeholder="/path/to/local/folder"
             className="neo-input min-w-0 flex-1 rounded-md px-3 py-4 text-base font-bold placeholder:text-base placeholder:font-normal placeholder:text-gray-700 sm:px-4 sm:py-6 sm:text-lg sm:placeholder:text-lg dark:placeholder:text-neutral-400"
             value={repoUrl}
             onChange={(e) => setRepoUrl(e.target.value)}
