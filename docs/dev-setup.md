@@ -60,6 +60,11 @@ cp .env.example .env
 ```
 
 Then set at least:
+- `AI_PROVIDER=kimi`
+- `KIMI_API_KEY` or `MOONSHOT_API_KEY`
+- `KIMI_MODEL` (defaults to `kimi-k2.6`)
+- `KIMI_BASE_URL` (defaults to `https://api.moonshot.ai/v1`)
+- `LOCAL_REPO_ROOT` to the directory that contains folders you want to diagram
 - `R2_ACCOUNT_ID`
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
@@ -68,8 +73,7 @@ Then set at least:
 - `CACHE_KEY_SECRET`
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
-- `AI_PROVIDER`
-- `OPENAI_API_KEY` or `OPENROUTER_API_KEY`
+- `OPENAI_API_KEY` or `OPENROUTER_API_KEY` if you switch away from Kimi
 
 Optional:
 - `OPENAI_MODEL` when `AI_PROVIDER=openai` (defaults to `gpt-5.4-mini`)
@@ -103,6 +107,10 @@ bun run dev
 
 with:
 - `NEXT_PUBLIC_GENERATION_BACKEND=next`
+- `AI_PROVIDER=kimi`
+
+Enter a local folder path in the homepage input. The path must be under
+`LOCAL_REPO_ROOT`; if `LOCAL_REPO_ROOT` is unset, the project directory is used.
 
 Production-parity mode:
 

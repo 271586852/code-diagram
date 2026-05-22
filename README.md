@@ -108,7 +108,18 @@ This keeps the backend's Python environment managed by `uv` and installs the bac
 cp .env.example .env
 ```
 
-Then edit the `.env` file with your backend AI credentials and optional GitHub personal access token.
+Then edit the `.env` file with your Kimi/Moonshot API credentials.
+
+For local-folder generation, use:
+
+```bash
+AI_PROVIDER=kimi
+KIMI_API_KEY=...
+KIMI_BASE_URL=https://api.moonshot.ai/v1
+KIMI_MODEL=kimi-k2.6
+NEXT_PUBLIC_GENERATION_BACKEND=next
+LOCAL_REPO_ROOT=/path/that/contains/projects
+```
 
 Use `.env.example` as the canonical list of required and optional variables.
 
@@ -123,6 +134,18 @@ You can now access the website at `localhost:3000`.
 This is the simplest local mode and works with:
 
 - `NEXT_PUBLIC_GENERATION_BACKEND=next`
+
+Enter an absolute local folder path in the homepage input, for example
+`/Users/you/projects/my-app`. The server only reads folders under
+`LOCAL_REPO_ROOT`; when unset, it defaults to this GitDiagram project folder.
+
+Local folder pages include two diagram views:
+
+- **Architecture**: Kimi summarizes the folder using the file tree, selected
+  source context, and a compact AST import-dependency summary.
+- **Import Dependencies**: a deterministic AST scan extracts file-level
+  `import`, `export ... from`, dynamic `import()`, and `require()` edges, then
+  renders a capped Mermaid dependency graph without calling Kimi.
 
 Run FastAPI backend only if you want production parity:
 
