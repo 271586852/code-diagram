@@ -52,3 +52,6 @@ backend/.venv
 
 # vscode
 .vscode/
+
+# WorkBuddy session memory (local only)
+.workbuddy/
