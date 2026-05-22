@@ -53,7 +53,7 @@ export function ApiKeyDialog({ isOpen, onClose, onSubmit }: ApiKeyDialogProps) {
             Enter API Key
           </DialogTitle>
           <DialogDescription className="sr-only">
-            Provide an OpenAI API key to use for diagram generation in this
+            Provide a Kimi API key to use for diagram generation in this
             browser.
           </DialogDescription>
         </DialogHeader>
@@ -62,14 +62,14 @@ export function ApiKeyDialog({ isOpen, onClose, onSubmit }: ApiKeyDialogProps) {
           className="space-y-4 text-black dark:text-neutral-200"
         >
           <div className="text-sm">
-            GitDiagram offers infinite free diagram generations! You can also
-            provide your own OpenAI API key to generate diagrams at your own cost.
-            The key is stored locally in your browser.
+            Provide your own Kimi API key to generate diagrams at your own cost.
+            The key is stored locally in your browser and sent only to the
+            generation API.
             <br />
             <br />
-            <span className="font-medium">Get your OpenAI API key </span>
+            <span className="font-medium">Get your Kimi API key </span>
             <Link
-              href="https://platform.openai.com/api-keys"
+              href="https://platform.kimi.ai"
               className="neo-link font-medium"
             >
               here
@@ -97,7 +97,7 @@ export function ApiKeyDialog({ isOpen, onClose, onSubmit }: ApiKeyDialogProps) {
           </details>
           <Input
             type="password"
-            placeholder="sk-..."
+            placeholder="MOONSHOT_API_KEY"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             className="neo-input flex-1 rounded-md px-3 py-2 text-base font-bold placeholder:text-base placeholder:font-normal placeholder:text-gray-700 dark:placeholder:text-neutral-400"

@@ -3,7 +3,15 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { after } from "next/server";
 
 import type { GenerationTokenUsage } from "~/features/diagram/cost";
-import { diagramGraphSchema, MAX_GRAPH_ATTEMPTS } from "~/features/diagram/graph";
+import {
+  diagramGraphSchema,
+  MAX_GRAPH_ATTEMPTS,
+  type DiagramGraph,
+} from "~/features/diagram/graph";
+import {
+  buildImportDependencyGraph,
+  formatImportGraphSummary,
+} from "~/server/analyze/import-graph";
 import type { ArtifactVisibility } from "~/server/storage/types";
 import { revalidateBrowseIndexCache } from "~/app/browse/data";
 import {
@@ -29,6 +37,10 @@ import {
 } from "~/server/generate/cost-estimate";
 import { extractTaggedSection, toTaggedMessage } from "~/server/generate/format";
 import { getGithubData } from "~/server/generate/github";
+import {
+  getLocalFolderData,
+  getLocalRepoIdentity,
+} from "~/server/generate/local";
 import {
   buildFileTreeLookup,
   compileDiagramGraph,
@@ -162,11 +174,16 @@ export async function POST(request: Request) {
   }
 
   const {
-    username,
-    repo,
+    username: requestedUsername,
+    repo: requestedRepo,
+    local_path: localPath,
     api_key: apiKey,
     github_pat: githubPat,
   } = parsed.data;
+  const localIdentity = localPath ? getLocalRepoIdentity(localPath) : null;
+  const username = localIdentity?.username ?? requestedUsername ?? "";
+  const repo = localIdentity?.repo ?? requestedRepo ?? "";
+  const displayName = localIdentity?.displayName ?? `${username}/${repo}`;
 
   const encoder = new TextEncoder();
   const generationAbortController = new AbortController();
@@ -216,11 +233,15 @@ export async function POST(request: Request) {
         let quotaReservation: ComplimentaryQuotaReservation | null = null;
         const actualUsages: GenerationTokenUsage[] = [];
         let hasCompleteMeasuredUsage = true;
-        let storageVisibility: ArtifactVisibility = githubPat?.trim()
+        let storageVisibility: ArtifactVisibility = localPath || githubPat?.trim()
           ? "private"
           : "public";
+        const shouldPersist = !localPath;
 
         const persistTerminalAudit = async (nextAudit = audit) => {
+          if (!shouldPersist) {
+            return;
+          }
           await persistTerminalSessionAudit({
             username,
             repo,
@@ -296,12 +317,27 @@ export async function POST(request: Request) {
             }
           }
 
-          const githubData = await getGithubData(
-            username,
-            repo,
-            githubPat,
-            generationAbortController.signal,
-          );
+          const githubData = localPath
+            ? await getLocalFolderData(localPath)
+            : await getGithubData(
+                username,
+                repo,
+                githubPat,
+                generationAbortController.signal,
+              );
+          let importGraphSummary: string | undefined;
+          if (localPath) {
+            try {
+              const importGraph = await buildImportDependencyGraph({
+                localPath,
+                maxNodes: 80,
+                maxEdges: 140,
+              });
+              importGraphSummary = formatImportGraphSummary(importGraph);
+            } catch {
+              importGraphSummary = undefined;
+            }
+          }
           storageVisibility = githubData.isPrivate ? "private" : "public";
           estimate = await estimateGenerationCost({
             provider,
@@ -309,7 +345,7 @@ export async function POST(request: Request) {
             fileTree: githubData.fileTree,
             readme: githubData.readme,
             username,
-            repo,
+            repo: localPath ? displayName : repo,
             apiKey,
             preferExactInputTokenCount: shouldUseExactInputTokenCount({
               provider,
@@ -495,6 +531,7 @@ export async function POST(request: Request) {
             userPrompt: toTaggedMessage({
               file_tree: githubData.fileTree,
               readme: githubData.readme,
+              import_graph: importGraphSummary,
             }),
             apiKey,
             reasoningEffort: "medium",
@@ -562,25 +599,65 @@ export async function POST(request: Request) {
               graph_attempts: audit.graphAttempts,
             });
 
-            const { output: graph, rawText, usage } = await generateStructuredOutput({
-              provider,
-              model,
-              systemPrompt: SYSTEM_GRAPH_PROMPT,
-              userPrompt: toTaggedMessage({
+            let graphResult: {
+              output: DiagramGraph;
+              rawText: string;
+              usage: GenerationTokenUsage | null;
+            };
+
+            try {
+              graphResult = await generateStructuredOutput({
+                provider,
+                model,
+                systemPrompt: SYSTEM_GRAPH_PROMPT,
+                userPrompt: toTaggedMessage({
                 explanation,
                 file_tree: githubData.fileTree,
+                import_graph: importGraphSummary,
                 repo_owner: username,
-                repo_name: repo,
-                previous_graph: previousGraphRaw,
-                validation_feedback: validationFeedback,
-              }),
-              schema: diagramGraphSchema,
-              schemaName: "diagram_graph",
-              apiKey,
-              reasoningEffort: "low",
-              maxOutputTokens: GRAPH_MAX_OUTPUT_TOKENS,
-              signal: generationAbortController.signal,
-            });
+                  repo_name: localPath ? displayName : repo,
+                  previous_graph: previousGraphRaw,
+                  validation_feedback: validationFeedback,
+                }),
+                schema: diagramGraphSchema,
+                schemaName: "diagram_graph",
+                apiKey,
+                reasoningEffort: "low",
+                maxOutputTokens: GRAPH_MAX_OUTPUT_TOKENS,
+                signal: generationAbortController.signal,
+              });
+            } catch (error) {
+              const graphError =
+                error instanceof Error
+                  ? error.message
+                  : "Graph generation returned invalid JSON.";
+              validationFeedback =
+                `The previous graph response was invalid JSON: ${graphError}. ` +
+                "Return one complete compact JSON object only.";
+              audit = withGraphAttempt(audit, {
+                attempt,
+                rawOutput: graphError,
+                graph: null,
+                validationFeedback,
+                status: "failed",
+                createdAt: new Date().toISOString(),
+              });
+              audit = withTimelineEvent(
+                audit,
+                "graph_validating",
+                `Graph JSON parsing failed on attempt ${attempt}/${MAX_GRAPH_ATTEMPTS}.`,
+              );
+              send({
+                status: "graph_validating",
+                session_id: audit.sessionId,
+                message: `Graph JSON parsing failed on attempt ${attempt}/${MAX_GRAPH_ATTEMPTS}.`,
+                validation_error: validationFeedback,
+                graph_attempts: audit.graphAttempts,
+              });
+              continue;
+            }
+
+            const { output: graph, rawText, usage } = graphResult;
 
             if (usage) {
               actualUsages.push(usage);
@@ -679,11 +756,18 @@ export async function POST(request: Request) {
           });
 
           throwIfAborted(generationAbortController.signal);
+          const localRootPath =
+            localPath &&
+            "rootPath" in githubData &&
+            typeof githubData.rootPath === "string"
+              ? githubData.rootPath
+              : undefined;
           const diagram = compileDiagramGraph({
             graph: validGraph,
             username,
             repo,
             branch: githubData.defaultBranch,
+            localRootPath,
           });
           audit = withCompiledDiagram(audit, diagram);
           send({
@@ -735,20 +819,22 @@ export async function POST(request: Request) {
           throwIfAborted(generationAbortController.signal);
           audit = withFinalCost(audit, finalCost);
           audit = withSuccess(withTimelineEvent(audit, "complete", "Diagram generation complete."));
-          await saveSuccessfulDiagramState({
-            username,
-            repo,
-            githubPat,
-            visibility: storageVisibility,
-            stargazerCount: githubData.stargazerCount,
-            explanation,
-            graph: validGraph,
-            diagram,
-            audit,
-            usedOwnKey: Boolean(apiKey),
-          });
+          if (shouldPersist) {
+            await saveSuccessfulDiagramState({
+              username,
+              repo,
+              githubPat,
+              visibility: storageVisibility,
+              stargazerCount: githubData.stargazerCount,
+              explanation,
+              graph: validGraph,
+              diagram,
+              audit,
+              usedOwnKey: Boolean(apiKey),
+            });
+          }
 
-          if (storageVisibility === "public") {
+          if (shouldPersist && storageVisibility === "public") {
             const lastSuccessfulAt = audit.updatedAt ?? new Date().toISOString();
             postResponseTasks.push(async () => {
               try {

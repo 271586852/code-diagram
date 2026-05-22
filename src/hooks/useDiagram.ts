@@ -46,6 +46,7 @@ export function useDiagram(
   username: string,
   repo: string,
   initialState?: DiagramStateResponse | null,
+  localPath?: string,
 ) {
   const [loading, setLoading] = useState<boolean>(!Boolean(initialState?.diagram));
   const [lastGenerated, setLastGenerated] = useState<Date | undefined>(
@@ -91,6 +92,7 @@ export function useDiagram(
   const { state, runGeneration, setState } = useDiagramStream({
     username,
     repo,
+    localPath,
     onComplete: onStreamComplete,
     onError: onStreamError,
     initialState: toInitialStreamState(initialState),
@@ -165,7 +167,12 @@ export function useDiagram(
       }
 
       try {
-        const githubPat = localStorage.getItem("github_pat");
+        const githubPat = localPath ? null : localStorage.getItem("github_pat");
+        if (localPath) {
+          await runGeneration(undefined);
+          return;
+        }
+
         const stateRecord = await getDiagramState(
           username,
           repo,
@@ -192,7 +199,7 @@ export function useDiagram(
         }
       }
     },
-    [applyStoredState, repo, runGeneration, setState, username],
+    [applyStoredState, localPath, repo, runGeneration, setState, username],
   );
 
   const getDiagram = useCallback(async () => {
@@ -222,7 +229,7 @@ export function useDiagram(
       error: undefined,
     }));
 
-    const githubPat = localStorage.getItem("github_pat");
+    const githubPat = localPath ? null : localStorage.getItem("github_pat");
 
     try {
       await runGeneration(githubPat ?? undefined);
@@ -235,7 +242,7 @@ export function useDiagram(
     } finally {
       setLoading(false);
     }
-  }, [repo, runGeneration, setState, username]);
+  }, [localPath, repo, runGeneration, setState, username]);
 
   useEffect(() => {
     if (initialState?.diagram) {
@@ -259,7 +266,7 @@ export function useDiagram(
 
     storeOpenAiKey(apiKey);
 
-    const githubPat = localStorage.getItem("github_pat");
+    const githubPat = localPath ? null : localStorage.getItem("github_pat");
     try {
       await runGeneration(githubPat ?? undefined);
     } catch {
@@ -283,13 +290,15 @@ export function useDiagram(
 
   const handleDiagramRenderError = useCallback(
     async (renderMessage: string) => {
-      const githubPat = localStorage.getItem("github_pat");
-      await persistDiagramRenderError(
-        username,
-        repo,
-        renderMessage,
-        githubPat ?? undefined,
-      );
+      if (!localPath) {
+        const githubPat = localStorage.getItem("github_pat");
+        await persistDiagramRenderError(
+          username,
+          repo,
+          renderMessage,
+          githubPat ?? undefined,
+        );
+      }
       setState((prev) => ({
         ...prev,
         status: "error",
@@ -298,7 +307,7 @@ export function useDiagram(
         validationError: renderMessage,
       }));
     },
-    [repo, setState, username],
+    [localPath, repo, setState, username],
   );
 
   return {

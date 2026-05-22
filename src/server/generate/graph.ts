@@ -1,3 +1,6 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
 import type {
   DiagramGraph,
   DiagramGraphEdge,
@@ -261,13 +264,18 @@ function buildGitHubUrl(
   return `https://github.com/${username}/${repo}/${pathType}/${branch}/${path}`;
 }
 
+function buildLocalFileUrl(rootPath: string, relativePath: string): string {
+  return pathToFileURL(path.join(rootPath, relativePath)).toString();
+}
+
 export function compileDiagramGraph(params: {
   graph: DiagramGraph;
   username: string;
   repo: string;
   branch: string;
+  localRootPath?: string;
 }): string {
-  const { graph, username, repo, branch } = params;
+  const { graph, username, repo, branch, localRootPath } = params;
   const lines: string[] = ["flowchart TD"];
   const groupedNodeIds = new Set<string>();
   const classAssignments = new Map<string, string[]>();
@@ -313,8 +321,11 @@ export function compileDiagramGraph(params: {
   if (nodesWithPaths.length) {
     lines.push("");
     for (const node of nodesWithPaths) {
+      const url = localRootPath
+        ? buildLocalFileUrl(localRootPath, node.path!)
+        : buildGitHubUrl(node.path!, username, repo, branch);
       lines.push(
-        `click ${mermaidNodeId(node.id)} "${buildGitHubUrl(node.path!, username, repo, branch)}"`,
+        `click ${mermaidNodeId(node.id)} "${url}"`,
       );
     }
   }

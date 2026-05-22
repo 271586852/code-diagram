@@ -16,6 +16,13 @@ function getEnvApiKey(provider: AIProvider): string | undefined {
     return process.env.OPENROUTER_API_KEY?.trim();
   }
 
+  if (provider === "kimi") {
+    return (
+      process.env.KIMI_API_KEY?.trim() ||
+      process.env.MOONSHOT_API_KEY?.trim()
+    );
+  }
+
   return process.env.OPENAI_API_KEY?.trim();
 }
 
@@ -45,6 +52,17 @@ function createClient(provider: AIProvider, apiKey: string): OpenAI {
     });
   }
 
+  if (provider === "kimi") {
+    return new OpenAI({
+      apiKey,
+      baseURL:
+        process.env.KIMI_BASE_URL?.trim() ||
+        process.env.MOONSHOT_BASE_URL?.trim() ||
+        "https://api.moonshot.ai/v1",
+      maxRetries: 0,
+    });
+  }
+
   return new OpenAI({
     apiKey,
     maxRetries: 0,
@@ -56,11 +74,65 @@ function resolveApiKey(provider: AIProvider, overrideApiKey?: string): string {
   if (!apiKey) {
     throw new Error(
       `Missing ${getProviderLabel(provider)} API key. Set ${
-        provider === "openrouter" ? "OPENROUTER_API_KEY" : "OPENAI_API_KEY"
+        provider === "openrouter"
+          ? "OPENROUTER_API_KEY"
+          : provider === "kimi"
+            ? "KIMI_API_KEY or MOONSHOT_API_KEY"
+            : "OPENAI_API_KEY"
       } or provide api_key in request.`,
     );
   }
   return apiKey;
+}
+
+function getKimiGraphFormatPrompt(schemaName: string): string {
+  return `
+Return a single valid JSON object named ${schemaName} with this exact shape:
+{
+  "groups": [
+    {"id": "lowercase_id", "label": "Group label", "description": "short description or null"}
+  ],
+  "nodes": [
+    {
+      "id": "lowercase_id",
+      "label": "Node label",
+      "type": "short repo-specific type",
+      "description": "short description or null",
+      "groupId": "matching_group_id or null",
+      "path": "repo-relative existing path or null",
+      "shape": "box, database, queue, document, circle, hexagon, or null"
+    }
+  ],
+  "edges": [
+    {
+      "from": "source_node_id",
+      "to": "target_node_id",
+      "label": "short label or null",
+      "description": "short description or null",
+      "style": "solid, dashed, or null"
+    }
+  ]
+}
+Use JSON object output only. Do not wrap it in Markdown.
+Keep the JSON compact:
+- Prefer 10-18 nodes and 6-24 edges.
+- Keep all descriptions to one short phrase, or null.
+- Do not repeat details from the explanation.
+- Use null for optional fields unless they materially improve the diagram.
+`;
+}
+
+function normalizeChatUsage(
+  usage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        total_tokens?: number;
+      }
+    | null
+    | undefined,
+): GenerationTokenUsage | null {
+  return normalizeGenerationUsage(usage);
 }
 
 export function estimateTokens(text: string): number {
@@ -152,6 +224,50 @@ export async function streamCompletion({
   signal,
 }: StreamCompletionParams): Promise<StreamCompletionResult> {
   const client = createClient(provider, resolveApiKey(provider, apiKey));
+
+  if (provider === "kimi") {
+    const chatStream = await client.chat.completions.create(
+      {
+        model,
+        stream: true,
+        stream_options: { include_usage: true },
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        ...(maxOutputTokens ? { max_tokens: maxOutputTokens } : {}),
+      },
+      signal ? { signal } : undefined,
+    );
+
+    let resolveUsage!: (usage: GenerationTokenUsage | null) => void;
+    const usagePromise = new Promise<GenerationTokenUsage | null>((resolve) => {
+      resolveUsage = resolve;
+    });
+
+    async function* outputStream(): AsyncGenerator<string, void, void> {
+      let finalUsage: GenerationTokenUsage | null = null;
+      try {
+        for await (const chunk of chatStream) {
+          finalUsage = normalizeChatUsage(chunk.usage) ?? finalUsage;
+          const content = chunk.choices[0]?.delta?.content;
+          if (content) {
+            yield content;
+          }
+        }
+        resolveUsage(finalUsage);
+      } catch (error) {
+        resolveUsage(null);
+        throw error;
+      }
+    }
+
+    return {
+      stream: outputStream(),
+      usagePromise,
+    };
+  }
+
   const stream = await client.responses.create(
     {
       model,
@@ -268,6 +384,10 @@ export async function countInputTokens({
   apiKey,
   reasoningEffort,
 }: CountInputTokensParams): Promise<number> {
+  if (provider === "kimi") {
+    return estimateTokens(`${systemPrompt}\n${userPrompt}`);
+  }
+
   const client = createClient(provider, resolveApiKey(provider, apiKey));
 
   const response = await client.responses.inputTokens.count({
@@ -301,6 +421,37 @@ export async function generateStructuredOutput<T>({
   const client = createClient(provider, resolveApiKey(provider, apiKey));
 
   try {
+    if (provider === "kimi") {
+      const kimiMaxOutputTokens = Math.max(maxOutputTokens ?? 0, 12_000);
+      const response = await client.chat.completions.create(
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content: `${systemPrompt}\n${getKimiGraphFormatPrompt(schemaName)}`,
+            },
+            { role: "user", content: userPrompt },
+          ],
+          response_format: { type: "json_object" },
+          max_tokens: kimiMaxOutputTokens,
+        },
+        signal ? { signal } : undefined,
+      );
+      const rawText = response.choices[0]?.message?.content?.trim() ?? "";
+      const parsedJson = JSON.parse(rawText) as unknown;
+      const parsed = schema.safeParse(parsedJson);
+      if (!parsed.success) {
+        throw new Error(parsed.error.message);
+      }
+
+      return {
+        output: parsed.data,
+        rawText,
+        usage: normalizeChatUsage(response.usage),
+      };
+    }
+
     const response = await client.responses.parse(
       {
         model,

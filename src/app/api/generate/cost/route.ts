@@ -9,6 +9,10 @@ import {
 } from "~/server/generate/complimentary-gate";
 import { getGithubData } from "~/server/generate/github";
 import {
+  getLocalFolderData,
+  getLocalRepoIdentity,
+} from "~/server/generate/local";
+import {
   getModel,
   getProvider,
   shouldUseExactInputTokenCount,
@@ -31,11 +35,16 @@ export async function POST(request: Request) {
     }
 
     const {
-      username,
-      repo,
+      username: requestedUsername,
+      repo: requestedRepo,
+      local_path: localPath,
       api_key: apiKey,
       github_pat: githubPat,
     } = parsed.data;
+    const localIdentity = localPath ? getLocalRepoIdentity(localPath) : null;
+    const username = localIdentity?.username ?? requestedUsername ?? "";
+    const repo = localIdentity?.repo ?? requestedRepo ?? "";
+    const displayName = localIdentity?.displayName ?? repo;
     const provider = getProvider();
     const model = getModel(provider);
 
@@ -57,14 +66,16 @@ export async function POST(request: Request) {
       }
     }
 
-    const githubData = await getGithubData(username, repo, githubPat);
+    const githubData = localPath
+      ? await getLocalFolderData(localPath)
+      : await getGithubData(username, repo, githubPat);
     const estimate = await estimateGenerationCost({
       provider,
       model,
       fileTree: githubData.fileTree,
       readme: githubData.readme,
       username,
-      repo,
+      repo: localPath ? displayName : repo,
       apiKey,
       preferExactInputTokenCount: shouldUseExactInputTokenCount({
         provider,

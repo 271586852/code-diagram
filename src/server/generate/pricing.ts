@@ -12,6 +12,8 @@ interface RawResponseUsage {
   input_tokens?: number;
   output_tokens?: number;
   total_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
   input_tokens_details?: {
     cached_tokens?: number;
   };
@@ -42,6 +44,9 @@ const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5-mini": { inputPerMillionUsd: 0.25, outputPerMillionUsd: 2.0 },
   "gpt-5-nano": { inputPerMillionUsd: 0.05, outputPerMillionUsd: 0.4 },
   "o4-mini": { inputPerMillionUsd: 1.1, outputPerMillionUsd: 4.4 },
+  "kimi-k2.6": { inputPerMillionUsd: 0.95, outputPerMillionUsd: 4.0 },
+  "kimi-k2.5": { inputPerMillionUsd: 0.6, outputPerMillionUsd: 3.0 },
+  moonshot: { inputPerMillionUsd: 0, outputPerMillionUsd: 0 },
 };
 const DEFAULT_PRICING = MODEL_PRICING[DEFAULT_PRICING_MODEL] as ModelPricing;
 
@@ -77,6 +82,9 @@ export function resolvePricingModel(model: string): string {
   if (withoutDate.startsWith("gpt-5-nano")) return "gpt-5-nano";
   if (withoutDate.startsWith("gpt-5")) return "gpt-5";
   if (withoutDate.startsWith("o4-mini")) return "o4-mini";
+  if (withoutDate.startsWith("kimi-k2.6")) return "kimi-k2.6";
+  if (withoutDate.startsWith("kimi-k2.5")) return "kimi-k2.5";
+  if (withoutDate.startsWith("moonshot")) return "moonshot";
 
   return DEFAULT_PRICING_MODEL;
 }
@@ -106,8 +114,8 @@ export function normalizeGenerationUsage(
     return null;
   }
 
-  const inputTokens = usage.input_tokens ?? 0;
-  const outputTokens = usage.output_tokens ?? 0;
+  const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
+  const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
   const totalTokens = usage.total_tokens ?? inputTokens + outputTokens;
   const cachedInputTokens = usage.input_tokens_details?.cached_tokens;
   const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;

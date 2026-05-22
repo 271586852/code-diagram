@@ -11,7 +11,7 @@ import { SITE_URL } from "~/lib/site";
 export const metadata: Metadata = {
   title: "GitDiagram",
   description:
-    "Turn any GitHub repository into an interactive diagram for visualization in seconds.",
+    "Turn any local code folder into an interactive diagram for visualization in seconds.",
   metadataBase: new URL(SITE_URL),
   keywords: [
     "github",
@@ -51,14 +51,14 @@ export const metadata: Metadata = {
     url: "https://gitdiagram.com",
     title: "GitDiagram - Repository to Diagram in Seconds",
     description:
-      "Turn any GitHub repository into an interactive diagram for visualization.",
+      "Turn any local code folder into an interactive diagram for visualization.",
     siteName: "GitDiagram",
   },
   twitter: {
     card: "summary_large_image",
     title: "GitDiagram - Repository to Diagram in Seconds",
     description:
-      "Turn any GitHub repository into an interactive diagram for visualization.",
+      "Turn any local code folder into an interactive diagram for visualization.",
     creator: "@ahmedkhaleel2004",
   },
   robots: {
