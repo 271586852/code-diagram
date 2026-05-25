@@ -36,6 +36,9 @@ interface NodeDetail {
   matched?: boolean;
   external?: boolean;
   orphan?: boolean;
+  circular?: boolean;
+  circularCount?: number;
+  orphanCount?: number;
   outgoing: string[];
   incoming: string[];
 }
@@ -52,6 +55,7 @@ const DARK_PALETTE = {
   matched: "#d2a8ff",
   external: "#6e7681",
   orphan: "#f0883e",
+  circular: "#f85149",
   edge: "#5a6473",
   dynamic: "#f0883e",
   highlight: "#4493f8",
@@ -69,6 +73,7 @@ const LIGHT_PALETTE = {
   matched: "#9333ea",
   external: "#94a3b8",
   orphan: "#ea580c",
+  circular: "#dc2626",
   edge: "#94a3b8",
   dynamic: "#ea580c",
   highlight: "#2563eb",
@@ -122,6 +127,10 @@ function buildStylesheet(palette: typeof DARK_PALETTE): StylesheetCSS[] {
       },
     },
     {
+      selector: "node[?circular]",
+      css: { "border-color": palette.circular, "border-width": 2 },
+    },
+    {
       selector: "node:selected",
       css: {
         "border-color": palette.accent,
@@ -153,6 +162,14 @@ function buildStylesheet(palette: typeof DARK_PALETTE): StylesheetCSS[] {
         "line-style": "dashed",
         "line-color": palette.dynamic,
         "target-arrow-color": palette.dynamic,
+      },
+    },
+    {
+      selector: "edge[?circular]",
+      css: {
+        "line-color": palette.circular,
+        "target-arrow-color": palette.circular,
+        opacity: 0.9,
       },
     },
     {
@@ -234,6 +251,7 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
   const [layout, setLayout] = useState<ImportGraphLayoutName>("cose");
   const [hideOrphan, setHideOrphan] = useState(false);
   const [onlyDynamic, setOnlyDynamic] = useState(false);
+  const [onlyCircular, setOnlyCircular] = useState(false);
 
   const [detail, setDetail] = useState<NodeDetail | null>(null);
 
@@ -255,6 +273,7 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
         relationDirection,
         hideOrphan,
         onlyDynamic,
+        onlyCircular,
       }),
     [
       graph,
@@ -265,6 +284,7 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
       relationDirection,
       hideOrphan,
       onlyDynamic,
+      onlyCircular,
     ],
   );
 
@@ -302,6 +322,9 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
         matched?: boolean;
         external?: boolean;
         orphan?: boolean;
+        circular?: boolean;
+        circularCount?: number;
+        orphanCount?: number;
       };
       cy.elements().removeClass("highlight").addClass("faded");
       const neighborhood = node.closedNeighborhood();
@@ -325,6 +348,9 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
         matched: data.matched,
         external: data.external,
         orphan: data.orphan,
+        circular: data.circular,
+        circularCount: data.circularCount,
+        orphanCount: data.orphanCount,
         outgoing,
         incoming,
       });
@@ -491,6 +517,14 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
           />
           Only dynamic imports
         </label>
+        <label className="col-span-1 flex items-center gap-2 text-xs sm:col-span-3 lg:col-span-2">
+          <input
+            type="checkbox"
+            checked={onlyCircular}
+            onChange={(event) => setOnlyCircular(event.target.checked)}
+          />
+          Only circular imports
+        </label>
 
         <div className="col-span-1 ml-auto flex items-center gap-2 sm:col-span-3 lg:col-span-2">
           <button
@@ -555,12 +589,24 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
                 {detail.fullPath}
               </p>
               {detail.kind === "group" ? (
-                <p>
-                  <span className="text-[hsl(var(--neo-soft-text))]">
-                    Files
-                  </span>
-                  : {detail.size ?? 0}
-                </p>
+                <div className="space-y-1">
+                  <p>
+                    <span className="text-[hsl(var(--neo-soft-text))]">
+                      Files
+                    </span>
+                    : {detail.size ?? 0}
+                  </p>
+                  <p>
+                    <span className="text-[hsl(var(--neo-soft-text))]">
+                      circular files
+                    </span>
+                    : {detail.circularCount ?? 0} ·{" "}
+                    <span className="text-[hsl(var(--neo-soft-text))]">
+                      orphan files
+                    </span>
+                    : {detail.orphanCount ?? 0}
+                  </p>
+                </div>
               ) : (
                 <>
                   {detail.dir ? (
@@ -593,7 +639,11 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
                     <span className="text-[hsl(var(--neo-soft-text))]">
                       orphan
                     </span>
-                    : {detail.orphan ? "yes" : "no"}
+                    : {detail.orphan ? "yes" : "no"} ·{" "}
+                    <span className="text-[hsl(var(--neo-soft-text))]">
+                      circular
+                    </span>
+                    : {detail.circular ? "yes" : "no"}
                   </p>
                 </>
               )}

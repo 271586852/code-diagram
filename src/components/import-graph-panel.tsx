@@ -85,7 +85,7 @@ export function ImportGraphPanel({
   return (
     <div className="flex w-full flex-col items-center gap-4">
       <div className="neo-panel w-full max-w-5xl rounded-lg p-4">
-        <div className="grid gap-3 text-sm font-semibold text-black sm:grid-cols-4 dark:text-neutral-100">
+        <div className="grid gap-3 text-sm font-semibold text-black sm:grid-cols-5 dark:text-neutral-100">
           <div>
             <div className="text-xs tracking-[0.14em] text-[hsl(var(--neo-soft-text))] uppercase">
               Source files
@@ -105,6 +105,12 @@ export function ImportGraphPanel({
             <div className="mt-1 text-lg">
               {graph.nodes.length} / {graph.edges.length}
             </div>
+          </div>
+          <div>
+            <div className="text-xs tracking-[0.14em] text-[hsl(var(--neo-soft-text))] uppercase">
+              Circular
+            </div>
+            <div className="mt-1 text-lg">{graph.summary.circularEdges}</div>
           </div>
           <div>
             <div className="text-xs tracking-[0.14em] text-[hsl(var(--neo-soft-text))] uppercase">

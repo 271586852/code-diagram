@@ -1,5 +1,6 @@
 import type {
   ImportGraphEdge,
+  ImportGraphNode,
   ImportGraphResult,
 } from "~/features/analyze/import-graph-types";
 
@@ -23,6 +24,7 @@ export interface ImportGraphElementsOptions {
   relationDirection: ImportGraphRelationDirection;
   hideOrphan: boolean;
   onlyDynamic: boolean;
+  onlyCircular: boolean;
 }
 
 export interface ImportGraphCyNodeData {
@@ -32,11 +34,14 @@ export interface ImportGraphCyNodeData {
   kind: "file" | "group";
   dir?: string;
   size?: number;
+  orphanCount?: number;
+  circularCount?: number;
   fanIn?: number;
   fanOut?: number;
   matched?: boolean;
   external?: boolean;
   orphan?: boolean;
+  circular?: boolean;
   dynamic?: boolean;
 }
 
@@ -46,6 +51,7 @@ export interface ImportGraphCyEdgeData {
   target: string;
   weight?: number;
   dynamic?: boolean;
+  circular?: boolean;
 }
 
 export interface ImportGraphElements {
@@ -54,6 +60,11 @@ export interface ImportGraphElements {
   matchedIds: Set<string>;
   totalNodeCount: number;
   totalEdgeCount: number;
+}
+
+interface NormalizedImportGraph {
+  nodes: ImportGraphNode[];
+  edges: ImportGraphEdge[];
 }
 
 export function trimSrc(value: string): string {
@@ -73,20 +84,61 @@ export function topTwoDir(value: string): string {
   return `${parts[0]}/${parts[1]}`;
 }
 
-export function listTopDirs(graph: ImportGraphResult): string[] {
-  const result = new Set<string>();
-  for (const node of graph.nodes) {
-    result.add(topDir(node.path));
+function normalizeGraph(graph: ImportGraphResult): NormalizedImportGraph {
+  if (!graph.modules?.length) {
+    return { nodes: graph.nodes, edges: graph.edges };
   }
-  for (const edge of graph.edges) {
-    result.add(topDir(edge.from));
-    result.add(topDir(edge.to));
+
+  const edgeList: ImportGraphEdge[] = [];
+  const importCounts = new Map<string, number>();
+  const importedByCounts = new Map<string, number>();
+  const nodeMeta = new Map<
+    string,
+    Pick<ImportGraphNode, "orphan" | "circular">
+  >();
+
+  for (const mod of graph.modules) {
+    nodeMeta.set(mod.source, {
+      orphan: mod.orphan,
+      circular: mod.circular,
+    });
+    for (const dep of mod.deps) {
+      edgeList.push({
+        from: mod.source,
+        to: dep.to,
+        specifier: dep.specifier,
+        kind: dep.kind,
+        dynamic: dep.dynamic,
+        circular: dep.circular,
+      });
+      importCounts.set(mod.source, (importCounts.get(mod.source) ?? 0) + 1);
+      importedByCounts.set(dep.to, (importedByCounts.get(dep.to) ?? 0) + 1);
+    }
+  }
+
+  const nodes = graph.modules.map<ImportGraphNode>((mod) => ({
+    id: mod.source,
+    path: mod.source,
+    importCount: importCounts.get(mod.source) ?? 0,
+    importedByCount: importedByCounts.get(mod.source) ?? 0,
+    orphan: nodeMeta.get(mod.source)?.orphan ?? false,
+    circular: nodeMeta.get(mod.source)?.circular ?? false,
+  }));
+
+  return { nodes, edges: edgeList };
+}
+
+export function listTopDirs(graph: ImportGraphResult): string[] {
+  const normalized = normalizeGraph(graph);
+  const result = new Set<string>();
+  for (const node of normalized.nodes) {
+    result.add(topDir(node.path));
   }
   return Array.from(result).sort();
 }
 
 function isDynamicEdge(edge: ImportGraphEdge): boolean {
-  return edge.kind === "dynamic-import";
+  return edge.dynamic || edge.kind === "dynamic-import";
 }
 
 function edgeMatchesDirection(
@@ -144,17 +196,23 @@ function expandSearchIds(
   return expanded;
 }
 
-function buildOrphanSet(graph: ImportGraphResult): Set<string> {
-  const seen = new Set<string>();
-  for (const edge of graph.edges) {
-    seen.add(edge.from);
-    seen.add(edge.to);
-  }
-  const orphan = new Set<string>();
-  for (const node of graph.nodes) {
-    if (!seen.has(node.path)) orphan.add(node.path);
-  }
-  return orphan;
+function filterEdges(
+  edges: ImportGraphEdge[],
+  options: Pick<ImportGraphElementsOptions, "onlyDynamic" | "onlyCircular">,
+): ImportGraphEdge[] {
+  return edges.filter((edge) => {
+    if (options.onlyDynamic && !isDynamicEdge(edge)) return false;
+    if (options.onlyCircular && !edge.circular) return false;
+    return true;
+  });
+}
+
+function shrinkNodesToEdges(
+  nodes: ImportGraphNode[],
+  edges: ImportGraphEdge[],
+): ImportGraphNode[] {
+  const involved = new Set(edges.flatMap((edge) => [edge.from, edge.to]));
+  return nodes.filter((node) => involved.has(node.path));
 }
 
 export function buildImportGraphElements(
@@ -169,21 +227,26 @@ export function buildImportGraphElements(
     relationDirection,
     hideOrphan,
     onlyDynamic,
+    onlyCircular,
   } = options;
 
-  const orphanSet = buildOrphanSet(graph);
-  const allEdges = onlyDynamic ? graph.edges.filter(isDynamicEdge) : graph.edges;
+  const normalized = normalizeGraph(graph);
+  const allEdges = filterEdges(normalized.edges, { onlyDynamic, onlyCircular });
+  const allNodes = normalized.nodes;
 
   if (mode === "file") {
     const keyword = search.trim().toLowerCase();
-    let candidateNodes = graph.nodes;
+    let candidateNodes = allNodes;
     if (focusDir) {
       candidateNodes = candidateNodes.filter(
         (node) => topDir(node.path) === focusDir,
       );
     }
     if (hideOrphan) {
-      candidateNodes = candidateNodes.filter((node) => !orphanSet.has(node.path));
+      candidateNodes = candidateNodes.filter((node) => !node.orphan);
+    }
+    if (onlyCircular && !keyword) {
+      candidateNodes = candidateNodes.filter((node) => node.circular);
     }
 
     let matchedIds = new Set<string>();
@@ -200,15 +263,15 @@ export function buildImportGraphElements(
         relationScope,
         relationDirection,
       );
-      visibleNodes = graph.nodes.filter((node) => expandedIds.has(node.path));
+      visibleNodes = allNodes.filter((node) => expandedIds.has(node.path));
       if (hideOrphan) {
         visibleNodes = visibleNodes.filter(
-          (node) => !orphanSet.has(node.path) || matchedIds.has(node.path),
+          (node) => !node.orphan || matchedIds.has(node.path),
         );
       }
     }
 
-    const visibleIds = new Set(visibleNodes.map((node) => node.path));
+    let visibleIds = new Set(visibleNodes.map((node) => node.path));
     let visibleEdges = allEdges.filter(
       (edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to),
     );
@@ -223,6 +286,14 @@ export function buildImportGraphElements(
         }
         return false;
       });
+    }
+
+    if (onlyCircular) {
+      visibleNodes = shrinkNodesToEdges(visibleNodes, visibleEdges);
+      visibleIds = new Set(visibleNodes.map((node) => node.path));
+      visibleEdges = visibleEdges.filter(
+        (edge) => visibleIds.has(edge.from) && visibleIds.has(edge.to),
+      );
     }
 
     const fanIn = new Map<string, number>();
@@ -245,7 +316,8 @@ export function buildImportGraphElements(
           fanOut: fanOut.get(node.path) ?? 0,
           matched: matchedIds.has(node.path),
           external: Boolean(keyword) && !matchedIds.has(node.path),
-          orphan: orphanSet.has(node.path),
+          orphan: node.orphan,
+          circular: node.circular,
         },
       };
     });
@@ -253,7 +325,7 @@ export function buildImportGraphElements(
     const seenEdgeKey = new Set<string>();
     const edgeElements: Array<{ data: ImportGraphCyEdgeData }> = [];
     visibleEdges.forEach((edge, index) => {
-      const key = `${edge.from}||${edge.to}||${edge.kind}`;
+      const key = `${edge.from}||${edge.to}||${edge.kind}||${edge.specifier}`;
       if (seenEdgeKey.has(key)) return;
       seenEdgeKey.add(key);
       edgeElements.push({
@@ -262,6 +334,7 @@ export function buildImportGraphElements(
           source: edge.from,
           target: edge.to,
           dynamic: isDynamicEdge(edge),
+          circular: edge.circular,
         },
       });
     });
@@ -270,41 +343,72 @@ export function buildImportGraphElements(
       nodes,
       edges: edgeElements,
       matchedIds,
-      totalNodeCount: graph.nodes.length,
-      totalEdgeCount: graph.edges.length,
+      totalNodeCount: allNodes.length,
+      totalEdgeCount: normalized.edges.length,
     };
   }
 
   // 目录聚合（folder / folder2）
   const groupFn = mode === "folder2" ? topTwoDir : topDir;
-  let candidateNodes = graph.nodes;
+  let candidateNodes = allNodes;
   if (focusDir && mode === "folder2") {
     candidateNodes = candidateNodes.filter(
       (node) => topDir(node.path) === focusDir,
     );
   }
   if (hideOrphan) {
-    candidateNodes = candidateNodes.filter((node) => !orphanSet.has(node.path));
+    candidateNodes = candidateNodes.filter((node) => !node.orphan);
   }
 
   const groupSize = new Map<string, number>();
+  const groupOrphanCount = new Map<string, number>();
+  const groupCircularCount = new Map<string, number>();
   for (const node of candidateNodes) {
     const groupId = groupFn(node.path);
     groupSize.set(groupId, (groupSize.get(groupId) ?? 0) + 1);
+    if (node.orphan) {
+      groupOrphanCount.set(groupId, (groupOrphanCount.get(groupId) ?? 0) + 1);
+    }
+    if (node.circular) {
+      groupCircularCount.set(
+        groupId,
+        (groupCircularCount.get(groupId) ?? 0) + 1,
+      );
+    }
   }
   const groupSet = new Set(groupSize.keys());
 
-  const edgeWeight = new Map<string, { weight: number; dynamic: boolean }>();
+  const edgeWeight = new Map<
+    string,
+    { weight: number; dynamic: boolean; circular: boolean }
+  >();
   for (const edge of allEdges) {
     const a = groupFn(edge.from);
     const b = groupFn(edge.to);
     if (!groupSet.has(a) || !groupSet.has(b)) continue;
     if (a === b) continue;
     const key = `${a}||${b}`;
-    const entry = edgeWeight.get(key) ?? { weight: 0, dynamic: false };
+    const entry = edgeWeight.get(key) ?? {
+      weight: 0,
+      dynamic: false,
+      circular: false,
+    };
     entry.weight += 1;
     if (isDynamicEdge(edge)) entry.dynamic = true;
+    if (edge.circular) entry.circular = true;
     edgeWeight.set(key, entry);
+  }
+
+  if (onlyCircular) {
+    const involved = new Set<string>();
+    for (const key of edgeWeight.keys()) {
+      const [a, b] = key.split("||");
+      if (a) involved.add(a);
+      if (b) involved.add(b);
+    }
+    for (const groupId of Array.from(groupSet)) {
+      if (!involved.has(groupId)) groupSet.delete(groupId);
+    }
   }
 
   const keyword = search.trim().toLowerCase();
@@ -332,7 +436,7 @@ export function buildImportGraphElements(
       while (queue.length) {
         const id = queue.shift();
         if (!id) break;
-        for (const [key, entry] of edgeWeight.entries()) {
+        for (const key of edgeWeight.keys()) {
           const [a, b] = key.split("||");
           if (!a || !b) continue;
           const matchOut = relationDirection !== "in" && a === id;
@@ -343,8 +447,6 @@ export function buildImportGraphElements(
             expanded.add(related);
             if (recursive) queue.push(related);
           }
-          // entry referenced to satisfy linter
-          void entry;
         }
         if (!recursive && queue.length === 0) break;
       }
@@ -359,6 +461,9 @@ export function buildImportGraphElements(
       fullPath: `src/${groupId}`,
       kind: "group" as const,
       size: groupSize.get(groupId) ?? 0,
+      orphanCount: groupOrphanCount.get(groupId) ?? 0,
+      circularCount: groupCircularCount.get(groupId) ?? 0,
+      circular: (groupCircularCount.get(groupId) ?? 0) > 0,
       matched: matchedGroups.has(groupId),
       external: Boolean(keyword) && !matchedGroups.has(groupId),
     },
@@ -377,6 +482,7 @@ export function buildImportGraphElements(
         target: b,
         weight: entry.weight,
         dynamic: entry.dynamic,
+        circular: entry.circular,
       },
     });
   }
@@ -385,7 +491,7 @@ export function buildImportGraphElements(
     nodes,
     edges: edgeElements,
     matchedIds: matchedGroups,
-    totalNodeCount: graph.nodes.length,
-    totalEdgeCount: graph.edges.length,
+    totalNodeCount: allNodes.length,
+    totalEdgeCount: normalized.edges.length,
   };
 }

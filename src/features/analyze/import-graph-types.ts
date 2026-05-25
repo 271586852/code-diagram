@@ -9,6 +9,8 @@ export interface ImportGraphNode {
   path: string;
   importCount: number;
   importedByCount: number;
+  orphan: boolean;
+  circular: boolean;
 }
 
 export interface ImportGraphEdge {
@@ -16,11 +18,37 @@ export interface ImportGraphEdge {
   to: string;
   specifier: string;
   kind: ImportEdgeKind;
+  dynamic: boolean;
+  circular: boolean;
+}
+
+export interface ImportGraphModuleDependency {
+  to: string;
+  specifier: string;
+  kind: ImportEdgeKind;
+  dynamic: boolean;
+  circular: boolean;
+}
+
+export interface ImportGraphModule {
+  source: string;
+  orphan: boolean;
+  circular: boolean;
+  deps: ImportGraphModuleDependency[];
+}
+
+export interface ImportGraphSummary {
+  totalCruised: number;
+  totalDependenciesCruised: number;
+  generatedAt: string;
+  circularEdges: number;
 }
 
 export interface ImportGraphResult {
   nodes: ImportGraphNode[];
   edges: ImportGraphEdge[];
+  modules: ImportGraphModule[];
+  summary: ImportGraphSummary;
   mermaid: string;
   truncated: boolean;
   totalSourceFiles: number;

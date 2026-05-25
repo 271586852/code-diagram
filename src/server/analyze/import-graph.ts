@@ -7,6 +7,7 @@ import ts from "typescript";
 import type {
   ImportEdgeKind,
   ImportGraphEdge,
+  ImportGraphModule,
   ImportGraphNode,
   ImportGraphResult,
 } from "~/features/analyze/import-graph-types";
@@ -38,14 +39,28 @@ const DEFAULT_MAX_NODES = 180;
 const DEFAULT_MAX_EDGES = 320;
 
 export function formatImportGraphSummary(graph: ImportGraphResult): string {
+  const sourceEdges = graph.modules.length ? graph.modules.flatMap((mod) =>
+    mod.deps.map((dep) => ({
+      from: mod.source,
+      to: dep.to,
+      kind: dep.kind,
+      specifier: dep.specifier,
+      circular: dep.circular,
+    })),
+  ) : graph.edges;
+
   const lines = [
     `source_files: ${graph.totalSourceFiles}`,
     `resolved_import_edges: ${graph.totalResolvedEdges}`,
     `rendered_edges: ${graph.edges.length}`,
-    graph.truncated ? "note: graph was capped for readability" : "",
+    `circular_edges: ${graph.summary.circularEdges}`,
+    graph.truncated ? "note: graph was capped for Mermaid readability" : "",
     "",
-    ...graph.edges.map(
-      (edge) => `${edge.from} -> ${edge.to} (${edge.kind}: ${edge.specifier})`,
+    ...sourceEdges.map(
+      (edge) =>
+        `${edge.from} -> ${edge.to} (${edge.kind}: ${edge.specifier}${
+          edge.circular ? ", circular" : ""
+        })`,
     ),
   ].filter(Boolean);
 
@@ -298,6 +313,95 @@ function collectImportSpecifiers(sourceFile: ts.SourceFile): Array<{
   return imports;
 }
 
+function edgeKey(edge: Pick<ImportGraphEdge, "from" | "to" | "specifier" | "kind">): string {
+  return `${edge.from}\u0000${edge.to}\u0000${edge.specifier}\u0000${edge.kind}`;
+}
+
+function detectCircularEdges(params: {
+  nodeIds: string[];
+  edges: ImportGraphEdge[];
+}): {
+  circularEdgeKeys: Set<string>;
+  circularNodeIds: Set<string>;
+} {
+  const { nodeIds, edges } = params;
+  const adjacency = new Map<string, string[]>();
+  for (const id of nodeIds) adjacency.set(id, []);
+  for (const edge of edges) {
+    if (!adjacency.has(edge.from) || !adjacency.has(edge.to)) continue;
+    adjacency.get(edge.from)?.push(edge.to);
+  }
+
+  const indexById = new Map<string, number>();
+  const lowlinkById = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const cyclicComponentByNode = new Map<string, string>();
+  let index = 0;
+  let componentIndex = 0;
+
+  function strongConnect(id: string) {
+    indexById.set(id, index);
+    lowlinkById.set(id, index);
+    index += 1;
+    stack.push(id);
+    onStack.add(id);
+
+    for (const target of adjacency.get(id) ?? []) {
+      if (!indexById.has(target)) {
+        strongConnect(target);
+        lowlinkById.set(
+          id,
+          Math.min(lowlinkById.get(id) ?? 0, lowlinkById.get(target) ?? 0),
+        );
+      } else if (onStack.has(target)) {
+        lowlinkById.set(
+          id,
+          Math.min(lowlinkById.get(id) ?? 0, indexById.get(target) ?? 0),
+        );
+      }
+    }
+
+    if (lowlinkById.get(id) !== indexById.get(id)) {
+      return;
+    }
+
+    const component: string[] = [];
+    while (stack.length) {
+      const member = stack.pop();
+      if (!member) break;
+      onStack.delete(member);
+      component.push(member);
+      if (member === id) break;
+    }
+
+    if (component.length > 1) {
+      const componentId = `c${componentIndex++}`;
+      for (const member of component) {
+        cyclicComponentByNode.set(member, componentId);
+      }
+    }
+  }
+
+  for (const id of nodeIds) {
+    if (!indexById.has(id)) strongConnect(id);
+  }
+
+  const circularEdgeKeys = new Set<string>();
+  const circularNodeIds = new Set<string>();
+  for (const edge of edges) {
+    const fromComponent = cyclicComponentByNode.get(edge.from);
+    const toComponent = cyclicComponentByNode.get(edge.to);
+    if (fromComponent && fromComponent === toComponent) {
+      circularEdgeKeys.add(edgeKey(edge));
+      circularNodeIds.add(edge.from);
+      circularNodeIds.add(edge.to);
+    }
+  }
+
+  return { circularEdgeKeys, circularNodeIds };
+}
+
 function mermaidNodeId(filePath: string): string {
   return `file_${filePath.replace(/[^a-zA-Z0-9_]/gu, "_")}`;
 }
@@ -324,7 +428,7 @@ function compileMermaidImportGraph(params: {
 
   if (params.truncated) {
     lines.push(
-      'truncated["Graph truncated for readability. Use a smaller folder for more detail."]',
+      'truncated["Graph truncated for Mermaid readability. Use the interactive view for full import search."]',
     );
     lines.push("class truncated meta");
   }
@@ -333,6 +437,8 @@ function compileMermaidImportGraph(params: {
     lines.push(
       `${mermaidNodeId(node.id)}["${escapeMermaidText(labelForPath(node.path))}"]`,
     );
+    if (node.circular) lines.push(`class ${mermaidNodeId(node.id)} circular`);
+    if (node.orphan) lines.push(`class ${mermaidNodeId(node.id)} orphan`);
   }
 
   for (const edge of params.edges) {
@@ -350,8 +456,40 @@ function compileMermaidImportGraph(params: {
 
   lines.push("");
   lines.push("classDef meta fill:#fef3c7,stroke:#d97706,color:#78350f");
+  lines.push("classDef circular fill:#fee2e2,stroke:#dc2626,color:#7f1d1d");
+  lines.push("classDef orphan fill:#ffedd5,stroke:#ea580c,color:#7c2d12");
 
   return lines.join("\n");
+}
+
+function buildModules(params: {
+  nodeIds: string[];
+  edges: ImportGraphEdge[];
+  orphanNodeIds: Set<string>;
+  circularNodeIds: Set<string>;
+}): ImportGraphModule[] {
+  const depsBySource = new Map<string, ImportGraphEdge[]>();
+  for (const edge of params.edges) {
+    const deps = depsBySource.get(edge.from) ?? [];
+    deps.push(edge);
+    depsBySource.set(edge.from, deps);
+  }
+
+  return params.nodeIds.map((source) => ({
+    source,
+    orphan: params.orphanNodeIds.has(source),
+    circular: params.circularNodeIds.has(source),
+    deps: (depsBySource.get(source) ?? [])
+      .slice()
+      .sort((a, b) => a.to.localeCompare(b.to) || a.kind.localeCompare(b.kind))
+      .map((edge) => ({
+        to: edge.to,
+        specifier: edge.specifier,
+        kind: edge.kind,
+        dynamic: edge.dynamic,
+        circular: edge.circular,
+      })),
+  }));
 }
 
 export async function buildImportDependencyGraph(params: {
@@ -364,7 +502,11 @@ export async function buildImportDependencyGraph(params: {
   const maxEdges = params.maxEdges ?? DEFAULT_MAX_EDGES;
   const config = await readTsConfig(rootPath);
   const sourceFiles = await walkSourceFiles(rootPath);
-  const edges: ImportGraphEdge[] = [];
+  const sourceFileIds = sourceFiles
+    .map((sourceFilePath) => toPosixPath(path.relative(rootPath, sourceFilePath)))
+    .sort((a, b) => a.localeCompare(b));
+  const sourceFileIdSet = new Set(sourceFileIds);
+  const rawEdges: ImportGraphEdge[] = [];
   let totalUnresolvedImports = 0;
 
   for (const sourceFilePath of sourceFiles) {
@@ -395,26 +537,51 @@ export async function buildImportDependencyGraph(params: {
       }
 
       const to = toPosixPath(path.relative(rootPath, resolved));
-      if (to && to !== from) {
-        edges.push({
+      if (to && to !== from && sourceFileIdSet.has(to)) {
+        rawEdges.push({
           from,
           to,
           specifier: imported.specifier,
           kind: imported.kind,
+          dynamic: imported.kind === "dynamic-import",
+          circular: false,
         });
       }
     }
   }
 
+  const { circularEdgeKeys, circularNodeIds } = detectCircularEdges({
+    nodeIds: sourceFileIds,
+    edges: rawEdges,
+  });
+  const edges = rawEdges.map<ImportGraphEdge>((edge) => ({
+    ...edge,
+    circular: circularEdgeKeys.has(edgeKey(edge)),
+  }));
+
   const importCounts = new Map<string, number>();
   const importedByCounts = new Map<string, number>();
+  const connectedFileIds = new Set<string>();
   for (const edge of edges) {
     importCounts.set(edge.from, (importCounts.get(edge.from) ?? 0) + 1);
     importedByCounts.set(edge.to, (importedByCounts.get(edge.to) ?? 0) + 1);
+    connectedFileIds.add(edge.from);
+    connectedFileIds.add(edge.to);
   }
+  const orphanNodeIds = new Set(
+    sourceFileIds.filter((filePath) => !connectedFileIds.has(filePath)),
+  );
+
+  const modules = buildModules({
+    nodeIds: sourceFileIds,
+    edges,
+    orphanNodeIds,
+    circularNodeIds,
+  });
 
   const rankedFiles = new Set(
-    Array.from(new Set(edges.flatMap((edge) => [edge.from, edge.to])))
+    sourceFileIds
+      .slice()
       .sort((a, b) => {
         const scoreA = (importCounts.get(a) ?? 0) + (importedByCounts.get(a) ?? 0);
         const scoreB = (importCounts.get(b) ?? 0) + (importedByCounts.get(b) ?? 0);
@@ -433,12 +600,22 @@ export async function buildImportDependencyGraph(params: {
       path: filePath,
       importCount: importCounts.get(filePath) ?? 0,
       importedByCount: importedByCounts.get(filePath) ?? 0,
+      orphan: orphanNodeIds.has(filePath),
+      circular: circularNodeIds.has(filePath),
     }));
-  const truncated = nodes.length < rankedFiles.size || visibleEdges.length < edges.length;
+  const truncated = nodes.length < sourceFileIds.length || visibleEdges.length < edges.length;
+  const summary = {
+    totalCruised: sourceFileIds.length,
+    totalDependenciesCruised: edges.length,
+    generatedAt: new Date().toISOString(),
+    circularEdges: edges.filter((edge) => edge.circular).length,
+  };
 
   return {
     nodes,
     edges: visibleEdges,
+    modules,
+    summary,
     mermaid: compileMermaidImportGraph({
       rootPath,
       nodes,
@@ -446,7 +623,7 @@ export async function buildImportDependencyGraph(params: {
       truncated,
     }),
     truncated,
-    totalSourceFiles: sourceFiles.length,
+    totalSourceFiles: sourceFileIds.length,
     totalResolvedEdges: edges.length,
     totalUnresolvedImports,
   };
