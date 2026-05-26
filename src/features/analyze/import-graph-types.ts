@@ -37,6 +37,15 @@ export interface ImportGraphModule {
   deps: ImportGraphModuleDependency[];
 }
 
+export interface ImportGraphExternalEdge {
+  from: string;
+  to: string;
+  absolutePath: string;
+  specifier: string;
+  kind: ImportEdgeKind;
+  dynamic: boolean;
+}
+
 export interface ImportGraphSummary {
   totalCruised: number;
   totalDependenciesCruised: number;
@@ -48,6 +57,7 @@ export interface ImportGraphResult {
   nodes: ImportGraphNode[];
   edges: ImportGraphEdge[];
   modules: ImportGraphModule[];
+  externalEdges: ImportGraphExternalEdge[];
   summary: ImportGraphSummary;
   mermaid: string;
   truncated: boolean;

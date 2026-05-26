@@ -1,5 +1,6 @@
 import type {
   ImportGraphEdge,
+  ImportGraphExternalEdge,
   ImportGraphNode,
   ImportGraphResult,
 } from "~/features/analyze/import-graph-types";
@@ -25,6 +26,7 @@ export interface ImportGraphElementsOptions {
   hideOrphan: boolean;
   onlyDynamic: boolean;
   onlyCircular: boolean;
+  selectedFileId?: string | null;
 }
 
 export interface ImportGraphCyNodeData {
@@ -52,6 +54,7 @@ export interface ImportGraphCyEdgeData {
   weight?: number;
   dynamic?: boolean;
   circular?: boolean;
+  external?: boolean;
 }
 
 export interface ImportGraphElements {
@@ -65,6 +68,7 @@ export interface ImportGraphElements {
 interface NormalizedImportGraph {
   nodes: ImportGraphNode[];
   edges: ImportGraphEdge[];
+  externalEdges: ImportGraphExternalEdge[];
 }
 
 export function trimSrc(value: string): string {
@@ -84,9 +88,23 @@ export function topTwoDir(value: string): string {
   return `${parts[0]}/${parts[1]}`;
 }
 
+function externalNodeId(edge: ImportGraphExternalEdge): string {
+  return `external:${edge.absolutePath}`;
+}
+
+function externalNodeLabel(edge: ImportGraphExternalEdge): string {
+  const cleaned = edge.to.replace(/^\.\.\//u, "../");
+  const parts = cleaned.split("/");
+  return parts[parts.length - 1] || cleaned || edge.specifier;
+}
+
 function normalizeGraph(graph: ImportGraphResult): NormalizedImportGraph {
   if (!graph.modules?.length) {
-    return { nodes: graph.nodes, edges: graph.edges };
+    return {
+      nodes: graph.nodes,
+      edges: graph.edges,
+      externalEdges: graph.externalEdges ?? [],
+    };
   }
 
   const edgeList: ImportGraphEdge[] = [];
@@ -125,7 +143,11 @@ function normalizeGraph(graph: ImportGraphResult): NormalizedImportGraph {
     circular: nodeMeta.get(mod.source)?.circular ?? false,
   }));
 
-  return { nodes, edges: edgeList };
+  return {
+    nodes,
+    edges: edgeList,
+    externalEdges: graph.externalEdges ?? [],
+  };
 }
 
 export function listTopDirs(graph: ImportGraphResult): string[] {
@@ -228,11 +250,17 @@ export function buildImportGraphElements(
     hideOrphan,
     onlyDynamic,
     onlyCircular,
+    selectedFileId,
   } = options;
 
   const normalized = normalizeGraph(graph);
   const allEdges = filterEdges(normalized.edges, { onlyDynamic, onlyCircular });
   const allNodes = normalized.nodes;
+  const allExternalEdges = normalized.externalEdges.filter((edge) => {
+    if (onlyDynamic && !edge.dynamic) return false;
+    if (onlyCircular) return false;
+    return true;
+  });
 
   if (mode === "file") {
     const keyword = search.trim().toLowerCase();
@@ -296,31 +324,64 @@ export function buildImportGraphElements(
       );
     }
 
+    const selectedExternalEdges =
+      selectedFileId && visibleIds.has(selectedFileId)
+        ? allExternalEdges.filter((edge) => edge.from === selectedFileId)
+        : [];
+
+    const externalNodes = Array.from(
+      new Map(
+        selectedExternalEdges.map((edge) => [externalNodeId(edge), edge]),
+      ).values(),
+    );
+
     const fanIn = new Map<string, number>();
     const fanOut = new Map<string, number>();
     for (const edge of visibleEdges) {
       fanOut.set(edge.from, (fanOut.get(edge.from) ?? 0) + 1);
       fanIn.set(edge.to, (fanIn.get(edge.to) ?? 0) + 1);
     }
+    for (const edge of selectedExternalEdges) {
+      const targetId = externalNodeId(edge);
+      fanOut.set(edge.from, (fanOut.get(edge.from) ?? 0) + 1);
+      fanIn.set(targetId, (fanIn.get(targetId) ?? 0) + 1);
+    }
 
-    const nodes = visibleNodes.map((node) => {
-      const label = node.path.split("/").pop() ?? node.path;
-      return {
+    const nodes = [
+      ...visibleNodes.map((node) => {
+        const label = node.path.split("/").pop() ?? node.path;
+        return {
+          data: {
+            id: node.path,
+            label,
+            fullPath: node.path,
+            kind: "file" as const,
+            dir: topDir(node.path),
+            fanIn: fanIn.get(node.path) ?? 0,
+            fanOut: fanOut.get(node.path) ?? 0,
+            matched: matchedIds.has(node.path),
+            external: Boolean(keyword) && !matchedIds.has(node.path),
+            orphan: node.orphan,
+            circular: node.circular,
+          },
+        };
+      }),
+      ...externalNodes.map((edge) => ({
         data: {
-          id: node.path,
-          label,
-          fullPath: node.path,
+          id: externalNodeId(edge),
+          label: externalNodeLabel(edge),
+          fullPath: edge.to,
           kind: "file" as const,
-          dir: topDir(node.path),
-          fanIn: fanIn.get(node.path) ?? 0,
-          fanOut: fanOut.get(node.path) ?? 0,
-          matched: matchedIds.has(node.path),
-          external: Boolean(keyword) && !matchedIds.has(node.path),
-          orphan: node.orphan,
-          circular: node.circular,
+          dir: edge.to.includes("/") ? edge.to.slice(0, edge.to.lastIndexOf("/")) : "",
+          fanIn: fanIn.get(externalNodeId(edge)) ?? 0,
+          fanOut: 0,
+          matched: false,
+          external: true,
+          orphan: false,
+          circular: false,
         },
-      };
-    });
+      })),
+    ];
 
     const seenEdgeKey = new Set<string>();
     const edgeElements: Array<{ data: ImportGraphCyEdgeData }> = [];
@@ -335,6 +396,22 @@ export function buildImportGraphElements(
           target: edge.to,
           dynamic: isDynamicEdge(edge),
           circular: edge.circular,
+          external: false,
+        },
+      });
+    });
+    selectedExternalEdges.forEach((edge, index) => {
+      const key = `${edge.from}||${externalNodeId(edge)}||${edge.kind}||${edge.specifier}`;
+      if (seenEdgeKey.has(key)) return;
+      seenEdgeKey.add(key);
+      edgeElements.push({
+        data: {
+          id: `x${index}`,
+          source: edge.from,
+          target: externalNodeId(edge),
+          dynamic: edge.dynamic,
+          circular: false,
+          external: true,
         },
       });
     });
@@ -344,7 +421,7 @@ export function buildImportGraphElements(
       edges: edgeElements,
       matchedIds,
       totalNodeCount: allNodes.length,
-      totalEdgeCount: normalized.edges.length,
+      totalEdgeCount: normalized.edges.length + normalized.externalEdges.length,
     };
   }
 

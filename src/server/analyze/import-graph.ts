@@ -7,6 +7,7 @@ import ts from "typescript";
 import type {
   ImportEdgeKind,
   ImportGraphEdge,
+  ImportGraphExternalEdge,
   ImportGraphModule,
   ImportGraphNode,
   ImportGraphResult,
@@ -507,6 +508,7 @@ export async function buildImportDependencyGraph(params: {
     .sort((a, b) => a.localeCompare(b));
   const sourceFileIdSet = new Set(sourceFileIds);
   const rawEdges: ImportGraphEdge[] = [];
+  const rawExternalEdges: ImportGraphExternalEdge[] = [];
   let totalUnresolvedImports = 0;
 
   for (const sourceFilePath of sourceFiles) {
@@ -537,7 +539,11 @@ export async function buildImportDependencyGraph(params: {
       }
 
       const to = toPosixPath(path.relative(rootPath, resolved));
-      if (to && to !== from && sourceFileIdSet.has(to)) {
+      if (!to || to === from) {
+        continue;
+      }
+
+      if (sourceFileIdSet.has(to)) {
         rawEdges.push({
           from,
           to,
@@ -546,7 +552,17 @@ export async function buildImportDependencyGraph(params: {
           dynamic: imported.kind === "dynamic-import",
           circular: false,
         });
+        continue;
       }
+
+      rawExternalEdges.push({
+        from,
+        to,
+        absolutePath: toPosixPath(resolved),
+        specifier: imported.specifier,
+        kind: imported.kind,
+        dynamic: imported.kind === "dynamic-import",
+      });
     }
   }
 
@@ -578,6 +594,19 @@ export async function buildImportDependencyGraph(params: {
     orphanNodeIds,
     circularNodeIds,
   });
+  const externalEdges = Array.from(
+    new Map(
+      rawExternalEdges.map((edge) => [
+        `${edge.from}\u0000${edge.to}\u0000${edge.specifier}\u0000${edge.kind}`,
+        edge,
+      ]),
+    ).values(),
+  ).sort(
+    (a, b) =>
+      a.from.localeCompare(b.from) ||
+      a.to.localeCompare(b.to) ||
+      a.kind.localeCompare(b.kind),
+  );
 
   const rankedFiles = new Set(
     sourceFileIds
@@ -615,6 +644,7 @@ export async function buildImportDependencyGraph(params: {
     nodes,
     edges: visibleEdges,
     modules,
+    externalEdges,
     summary,
     mermaid: compileMermaidImportGraph({
       rootPath,

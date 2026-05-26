@@ -165,6 +165,15 @@ function buildStylesheet(palette: typeof DARK_PALETTE): StylesheetCSS[] {
       },
     },
     {
+      selector: "edge[?external]",
+      css: {
+        "line-style": "dotted",
+        "line-color": palette.external,
+        "target-arrow-color": palette.external,
+        opacity: 0.85,
+      },
+    },
+    {
       selector: "edge[?circular]",
       css: {
         "line-color": palette.circular,
@@ -232,9 +241,81 @@ function controlBaseClass() {
   return "rounded border border-[hsl(var(--neo-border,0_0%_85%))] bg-white px-2 py-1 text-xs text-black dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100";
 }
 
+function buildNodeDetail(node: NodeSingular): NodeDetail {
+  const data = node.data() as {
+    id: string;
+    fullPath?: string;
+    kind: "file" | "group";
+    dir?: string;
+    size?: number;
+    fanIn?: number;
+    fanOut?: number;
+    matched?: boolean;
+    external?: boolean;
+    orphan?: boolean;
+    circular?: boolean;
+    circularCount?: number;
+    orphanCount?: number;
+  };
+
+  const outgoing = node
+    .outgoers("node")
+    .map((n) => (n.data("fullPath") as string | undefined) ?? n.id());
+  const incoming = node
+    .incomers("node")
+    .map((n) => (n.data("fullPath") as string | undefined) ?? n.id());
+
+  return {
+    id: data.id,
+    fullPath: data.fullPath ?? data.id,
+    kind: data.kind,
+    dir: data.dir,
+    size: data.size,
+    fanIn: data.fanIn,
+    fanOut: data.fanOut,
+    matched: data.matched,
+    external: data.external,
+    orphan: data.orphan,
+    circular: data.circular,
+    circularCount: data.circularCount,
+    orphanCount: data.orphanCount,
+    outgoing,
+    incoming,
+  };
+}
+
+function highlightNeighborhood(cy: Core, node: NodeSingular) {
+  cy.elements().removeClass("highlight").addClass("faded");
+  node.closedNeighborhood().removeClass("faded").addClass("highlight");
+}
+
+function applyActiveSelection(
+  cy: Core,
+  activeNodeId: string | null,
+  setDetail: (detail: NodeDetail | null) => void,
+) {
+  if (!activeNodeId) {
+    cy.elements().removeClass("faded").removeClass("highlight");
+    setDetail(null);
+    return;
+  }
+
+  const activeCollection = cy.getElementById(activeNodeId);
+  if (!activeCollection.nonempty() || !activeCollection.isNode()) {
+    cy.elements().removeClass("faded").removeClass("highlight");
+    setDetail(null);
+    return;
+  }
+
+  const activeNode = activeCollection[0] as NodeSingular;
+  highlightNeighborhood(cy, activeNode);
+  setDetail(buildNodeDetail(activeNode));
+}
+
 export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const activeNodeIdRef = useRef<string | null>(null);
 
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -252,13 +333,26 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
   const [hideOrphan, setHideOrphan] = useState(false);
   const [onlyDynamic, setOnlyDynamic] = useState(false);
   const [onlyCircular, setOnlyCircular] = useState(false);
+  const [expandedFileId, setExpandedFileId] = useState<string | null>(null);
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
 
   const [detail, setDetail] = useState<NodeDetail | null>(null);
+
+  useEffect(() => {
+    activeNodeIdRef.current = activeNodeId;
+  }, [activeNodeId]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 250);
     return () => clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    if (mode === "file") return;
+    setExpandedFileId(null);
+    setActiveNodeId(null);
+    setDetail(null);
+  }, [mode]);
 
   const dirs = useMemo(() => listTopDirs(graph), [graph]);
 
@@ -274,6 +368,7 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
         hideOrphan,
         onlyDynamic,
         onlyCircular,
+        selectedFileId: mode === "file" ? expandedFileId : null,
       }),
     [
       graph,
@@ -285,6 +380,7 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
       hideOrphan,
       onlyDynamic,
       onlyCircular,
+      expandedFileId,
     ],
   );
 
@@ -305,6 +401,8 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
     cy.on("tap", (event: EventObject) => {
       if (event.target === cy) {
         cy.elements().removeClass("faded").removeClass("highlight");
+        setExpandedFileId(null);
+        setActiveNodeId(null);
         setDetail(null);
       }
     });
@@ -313,47 +411,16 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
       const node = event.target as NodeSingular;
       const data = node.data() as {
         id: string;
-        fullPath?: string;
         kind: "file" | "group";
-        dir?: string;
-        size?: number;
-        fanIn?: number;
-        fanOut?: number;
-        matched?: boolean;
         external?: boolean;
-        orphan?: boolean;
-        circular?: boolean;
-        circularCount?: number;
-        orphanCount?: number;
       };
-      cy.elements().removeClass("highlight").addClass("faded");
-      const neighborhood = node.closedNeighborhood();
-      neighborhood.removeClass("faded").addClass("highlight");
 
-      const outgoing = node
-        .outgoers("node")
-        .map((n) => (n.data("fullPath") as string | undefined) ?? n.id());
-      const incoming = node
-        .incomers("node")
-        .map((n) => (n.data("fullPath") as string | undefined) ?? n.id());
-
-      setDetail({
-        id: data.id,
-        fullPath: data.fullPath ?? data.id,
-        kind: data.kind,
-        dir: data.dir,
-        size: data.size,
-        fanIn: data.fanIn,
-        fanOut: data.fanOut,
-        matched: data.matched,
-        external: data.external,
-        orphan: data.orphan,
-        circular: data.circular,
-        circularCount: data.circularCount,
-        orphanCount: data.orphanCount,
-        outgoing,
-        incoming,
-      });
+      if (data.kind === "file" && !data.external) {
+        setExpandedFileId(data.id);
+      }
+      setActiveNodeId(data.id);
+      highlightNeighborhood(cy, node);
+      setDetail(buildNodeDetail(node));
     });
 
     cy.on("dbltap", "node", (event: EventObject) => {
@@ -393,8 +460,14 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
       cy.add(next);
     });
     cy.layout(getLayoutOptions(layout)).run();
-    setDetail(null);
+    applyActiveSelection(cy, activeNodeIdRef.current, setDetail);
   }, [elements, layout]);
+
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    applyActiveSelection(cy, activeNodeId, setDetail);
+  }, [activeNodeId]);
 
   return (
     <div className="flex w-full max-w-6xl flex-col gap-3">
@@ -580,8 +653,9 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
           </div>
           {!detail ? (
             <p className="text-[hsl(var(--neo-soft-text))]">
-              Tap a node to inspect its dependencies. Double-tap to focus on its
-              neighborhood.
+              Tap a node to inspect its dependencies. In file view, tapping an
+              internal file also reveals its out-of-scope imports as gray nodes.
+              Double-tap to focus on its neighborhood.
             </p>
           ) : (
             <div className="space-y-2 break-all">
