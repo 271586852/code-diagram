@@ -350,13 +350,16 @@ export function buildImportGraphElements(
     const nodes = [
       ...visibleNodes.map((node) => {
         const label = node.path.split("/").pop() ?? node.path;
+        const directory = node.path.includes("/")
+          ? node.path.slice(0, node.path.lastIndexOf("/"))
+          : "";
         return {
           data: {
             id: node.path,
             label,
             fullPath: node.path,
             kind: "file" as const,
-            dir: topDir(node.path),
+            dir: directory,
             fanIn: fanIn.get(node.path) ?? 0,
             fanOut: fanOut.get(node.path) ?? 0,
             matched: matchedIds.has(node.path),
@@ -535,7 +538,7 @@ export function buildImportGraphElements(
     data: {
       id: groupId,
       label: `${groupId}\n(${groupSize.get(groupId) ?? 0})`,
-      fullPath: `src/${groupId}`,
+      fullPath: groupId,
       kind: "group" as const,
       size: groupSize.get(groupId) ?? 0,
       orphanCount: groupOrphanCount.get(groupId) ?? 0,

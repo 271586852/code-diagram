@@ -23,6 +23,8 @@ import {
 
 interface ImportGraphCytoscapeProps {
   graph: ImportGraphResult;
+  localPath: string;
+  onDirectorySelect?: (nextPath: string) => void;
 }
 
 interface NodeDetail {
@@ -312,10 +314,44 @@ function applyActiveSelection(
   setDetail(buildNodeDetail(activeNode));
 }
 
-export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
+function resolveAbsolutePath(basePath: string, relativePath: string): string {
+  const stack = basePath.split("/").filter(Boolean);
+  for (const segment of relativePath.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      stack.pop();
+      continue;
+    }
+    stack.push(segment);
+  }
+  return `/${stack.join("/")}`;
+}
+
+function getDirectoryTarget(params: {
+  basePath: string;
+  fullPath: string;
+  kind: "file" | "group";
+}): string {
+  const { basePath, fullPath, kind } = params;
+  const relativeDirectory = kind === "group"
+    ? fullPath
+    : fullPath.includes("/")
+      ? fullPath.slice(0, fullPath.lastIndexOf("/"))
+      : "";
+
+  return resolveAbsolutePath(basePath, relativeDirectory);
+}
+
+export function ImportGraphCytoscape({
+  graph,
+  localPath,
+  onDirectorySelect,
+}: ImportGraphCytoscapeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const activeNodeIdRef = useRef<string | null>(null);
+  const localPathRef = useRef(localPath);
+  const onDirectorySelectRef = useRef(onDirectorySelect);
 
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -338,9 +374,26 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
 
   const [detail, setDetail] = useState<NodeDetail | null>(null);
 
+  const detailNavigationTarget = useMemo(() => {
+    if (!detail) return null;
+    return getDirectoryTarget({
+      basePath: localPath,
+      fullPath: detail.fullPath,
+      kind: detail.kind,
+    });
+  }, [detail, localPath]);
+
   useEffect(() => {
     activeNodeIdRef.current = activeNodeId;
   }, [activeNodeId]);
+
+  useEffect(() => {
+    localPathRef.current = localPath;
+  }, [localPath]);
+
+  useEffect(() => {
+    onDirectorySelectRef.current = onDirectorySelect;
+  }, [onDirectorySelect]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 250);
@@ -425,7 +478,16 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
 
     cy.on("dbltap", "node", (event: EventObject) => {
       const node = event.target as NodeSingular;
-      cy.fit(node.closedNeighborhood(), 30);
+      const data = node.data() as {
+        fullPath?: string;
+        kind: "file" | "group";
+      };
+      const nextPath = getDirectoryTarget({
+        basePath: localPathRef.current,
+        fullPath: data.fullPath ?? node.id(),
+        kind: data.kind,
+      });
+      onDirectorySelectRef.current?.(nextPath);
     });
 
     cyRef.current = cy;
@@ -655,13 +717,24 @@ export function ImportGraphCytoscape({ graph }: ImportGraphCytoscapeProps) {
             <p className="text-[hsl(var(--neo-soft-text))]">
               Tap a node to inspect its dependencies. In file view, tapping an
               internal file also reveals its out-of-scope imports as gray nodes.
-              Double-tap to focus on its neighborhood.
+              Double-tap a node to jump to its directory.
             </p>
           ) : (
             <div className="space-y-2 break-all">
-              <p className="font-semibold text-[var(--neo-accent,#2563eb)]">
-                {detail.fullPath}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-semibold text-[var(--neo-accent,#2563eb)]">
+                  {detail.fullPath}
+                </p>
+                {detailNavigationTarget ? (
+                  <button
+                    type="button"
+                    className={controlBaseClass()}
+                    onClick={() => onDirectorySelect?.(detailNavigationTarget)}
+                  >
+                    打开目录
+                  </button>
+                ) : null}
+              </div>
               {detail.kind === "group" ? (
                 <div className="space-y-1">
                   <p>

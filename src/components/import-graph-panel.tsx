@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import MermaidChart from "~/components/mermaid-diagram";
 import {
@@ -32,13 +32,90 @@ export function ImportGraphPanel({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [renderMode, setRenderMode] = useState<RenderMode>("cytoscape");
+  const [currentPath, setCurrentPath] = useState(localPath);
+  const [historyPaths, setHistoryPaths] = useState<string[]>([localPath]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
+  const currentPathRef = useRef(currentPath);
+  const historyPathsRef = useRef(historyPaths);
+  const historyIndexRef = useRef(historyIndex);
+
+  useEffect(() => {
+    currentPathRef.current = currentPath;
+  }, [currentPath]);
+
+  useEffect(() => {
+    historyPathsRef.current = historyPaths;
+  }, [historyPaths]);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  const syncUrl = useCallback(
+    (nextPath: string, mode: "pushState" | "replaceState") => {
+      if (typeof window === "undefined") return;
+      const url = new URL(window.location.href);
+      url.searchParams.set("path", nextPath);
+      window.history[mode]({ path: nextPath }, "", url);
+    },
+    [],
+  );
+
+  const navigateToPath = useCallback(
+    (nextPath: string) => {
+      const normalized = nextPath.trim();
+      if (!normalized || normalized === currentPathRef.current) return;
+
+      const baseHistory = historyPathsRef.current.slice(0, historyIndexRef.current + 1);
+      const nextHistory = [...baseHistory, normalized];
+      const nextIndex = nextHistory.length - 1;
+
+      setCurrentPath(normalized);
+      setHistoryPaths(nextHistory);
+      setHistoryIndex(nextIndex);
+      syncUrl(normalized, "pushState");
+    },
+    [syncUrl],
+  );
+
+  useEffect(() => {
+    setCurrentPath(localPath);
+    setHistoryPaths([localPath]);
+    setHistoryIndex(0);
+    syncUrl(localPath, "replaceState");
+  }, [localPath, syncUrl]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const handlePopState = () => {
+      const nextPath = new URL(window.location.href).searchParams.get("path");
+      if (!nextPath) return;
+
+      setCurrentPath(nextPath);
+
+      const existingIndex = historyPathsRef.current.lastIndexOf(nextPath);
+      if (existingIndex >= 0) {
+        setHistoryIndex(existingIndex);
+        return;
+      }
+
+      const nextHistory = [...historyPathsRef.current, nextPath];
+      setHistoryPaths(nextHistory);
+      setHistoryIndex(nextHistory.length - 1);
+    };
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    fetchImportGraph(localPath)
+    fetchImportGraph(currentPath)
       .then((result) => {
         if (cancelled) return;
         setGraph(result);
@@ -60,7 +137,10 @@ export function ImportGraphPanel({
     return () => {
       cancelled = true;
     };
-  }, [localPath]);
+  }, [currentPath]);
+
+  const canGoBack = historyIndex > 0;
+  const canGoForward = historyIndex < historyPaths.length - 1;
 
   if (loading) {
     return (
@@ -119,6 +199,57 @@ export function ImportGraphPanel({
             <div className="mt-1 text-lg">{graph.totalUnresolvedImports}</div>
           </div>
         </div>
+
+        <div className="mt-4 flex flex-col gap-3 rounded-lg border border-neutral-200/70 bg-white/60 p-3 dark:border-neutral-800 dark:bg-neutral-950/30">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-medium text-[hsl(var(--neo-soft-text))]">
+              Directory history:
+            </span>
+            <button
+              type="button"
+              disabled={!canGoBack}
+              onClick={() => {
+                if (!canGoBack || typeof window === "undefined") return;
+                window.history.back();
+              }}
+              className={`rounded border px-2 py-1 ${
+                canGoBack
+                  ? "border-neutral-300 bg-white text-black dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                  : "cursor-not-allowed border-neutral-200 bg-neutral-100 text-neutral-400 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-600"
+              }`}
+            >
+              后退
+            </button>
+            <button
+              type="button"
+              disabled={!canGoForward}
+              onClick={() => {
+                if (!canGoForward || typeof window === "undefined") return;
+                window.history.forward();
+              }}
+              className={`rounded border px-2 py-1 ${
+                canGoForward
+                  ? "border-neutral-300 bg-white text-black dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
+                  : "cursor-not-allowed border-neutral-200 bg-neutral-100 text-neutral-400 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-600"
+              }`}
+            >
+              前进
+            </button>
+            <span className="text-[hsl(var(--neo-soft-text))]">
+              {historyIndex + 1} / {historyPaths.length}
+            </span>
+          </div>
+
+          <div className="text-xs">
+            <div className="font-medium text-[hsl(var(--neo-soft-text))]">
+              Current directory
+            </div>
+            <div className="mt-1 break-all font-mono text-[11px] text-black dark:text-neutral-100">
+              {currentPath}
+            </div>
+          </div>
+        </div>
+
         {graph.truncated ? (
           <p className="mt-3 text-sm font-medium text-[hsl(var(--neo-soft-text))]">
             The rendered graph is capped for readability. The counts still reflect
@@ -157,7 +288,11 @@ export function ImportGraphPanel({
 
       <div className="flex w-full justify-center px-4">
         {renderMode === "cytoscape" ? (
-          <ImportGraphCytoscape graph={graph} />
+          <ImportGraphCytoscape
+            graph={graph}
+            localPath={currentPath}
+            onDirectorySelect={navigateToPath}
+          />
         ) : (
           <MermaidChart chart={graph.mermaid} zoomingEnabled={zoomingEnabled} />
         )}
